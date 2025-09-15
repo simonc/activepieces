@@ -13,7 +13,7 @@ export const mailboxDropdown = (params: DropdownParams) =>
     displayName: params.displayName,
     description: params.description,
     required: params.required,
-    refreshers: [],
+    refreshers: ['auth'],
     async options({ auth }) {
       if (!auth) {
         return {
@@ -25,12 +25,10 @@ export const mailboxDropdown = (params: DropdownParams) =>
 
       try {
         const mailboxes = await fetchMailboxes(auth as ImapAuth);
-        const options = mailboxes.map(
-          ({ name, path }: { name: string; path: string }) => ({
-            label: name,
-            value: path,
-          })
-        );
+        const options = mailboxes.map(({ path }: { path: string }) => ({
+          label: path,
+          value: path,
+        }));
 
         return { disabled: false, options };
       } catch (error: any) {
