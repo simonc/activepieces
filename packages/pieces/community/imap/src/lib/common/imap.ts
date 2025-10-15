@@ -3,6 +3,7 @@ import {
   type CopyResponseObject,
   type ListResponse,
   type MailboxLockObject,
+  type MailboxObject,
 } from 'imapflow';
 import { type Attachment, type ParsedMail, simpleParser } from 'mailparser';
 import { Readable } from 'stream';
@@ -12,21 +13,33 @@ import { type ImapAuth } from './auth';
 import { DEFAULT_LOOKBACK_HOURS } from './constants';
 import {
   type ImapClientError,
-  ImapConnectionRefusedError,
-  ImapHostNotFoundError,
-  ImapSslPacketLengthTooLongError,
-  ImapConnectionTimeoutError,
   ImapAuthenticationError,
   ImapCertificateError,
-  ImapError,
-  ImapMailboxNotFoundError,
   ImapConnectionLostError,
+  ImapConnectionRefusedError,
+  ImapConnectionTimeoutError,
   ImapEmailNotFoundError,
+  ImapFolderExistsError,
+  ImapFolderPermissionError,
+  ImapError,
+  ImapHostNotFoundError,
+  ImapInvalidFolderNameError,
+  ImapMailboxNotFoundError,
+  ImapSslPacketLengthTooLongError,
 } from './errors';
 
 type Message = {
   data: ParsedMail & { uid: number };
   epochMilliSeconds: number;
+};
+
+type MailboxStats = {
+  deleted: number;
+  flagged: number;
+  recent: number;
+  total: number;
+  totalSize: number | null;
+  unread: number;
 };
 
 function buildImapClient(auth: ImapAuth): ImapFlow {
@@ -99,6 +112,37 @@ async function copyEmail<T extends { success: boolean; newUid?: number }>({
   )) as T;
 }
 
+async function createMailbox<T extends { success: true; path: string }>({
+  auth,
+  folderName,
+  parentFolder,
+}: {
+  auth: ImapAuth;
+  folderName: string;
+  parentFolder?: string;
+}): Promise<T> {
+  return (await performImapOperation(auth, async (imapClient) => {
+    validateFolderName(folderName);
+
+    const path = [parentFolder, folderName].filter(Boolean) as string[];
+
+    try {
+      const createdFolder = await imapClient.mailboxCreate(path);
+      return { success: true, path: createdFolder.path };
+    } catch (error: any) {
+      const imapError = error as ImapClientError;
+
+      if (/permission|denied/.test(error.responseText)) {
+        throw new ImapFolderPermissionError('create');
+      } else if (/exist/.test(error.responseText)) {
+        throw new ImapFolderExistsError();
+      }
+
+      throw new ImapError(`Failed to create folder.`);
+    }
+  })) as T;
+}
+
 async function deleteEmail<T extends { success: boolean }>({
   auth,
   mailbox,
@@ -112,6 +156,19 @@ async function deleteEmail<T extends { success: boolean }>({
     await confirmEmailExists(imapClient, uid);
     await imapClient.messageDelete({ uid }, { uid: true });
 
+    return { success: true };
+  })) as T;
+}
+
+async function deleteMailbox<T extends { success: true }>({
+  auth,
+  mailbox,
+}: {
+  auth: ImapAuth;
+  mailbox: string;
+}): Promise<T> {
+  return (await performImapOperation(auth, async (imapClient) => {
+    await imapClient.mailboxDelete(mailbox);
     return { success: true };
   })) as T;
 }
@@ -154,6 +211,74 @@ async function fetchMailboxes<T extends ListResponse[]>(
   })) as T;
 }
 
+async function getMailbox<T extends MailboxObject>(
+  auth: ImapAuth,
+  mailboxPath: string
+): Promise<T> {
+  return (await performImapOperation(auth, async (imapClient) => {
+    try {
+      const mailbox = await imapClient.mailboxOpen(mailboxPath);
+      await imapClient.mailboxClose();
+      return mailbox;
+    } catch (error) {
+      detectMissingMailbox(error);
+      throw error;
+    }
+  })) as T;
+}
+
+async function getMailboxStats<T extends MailboxStats>({
+  auth,
+  mailbox,
+  includeSizeInfo,
+}: {
+  auth: ImapAuth;
+  mailbox: string;
+  includeSizeInfo: boolean;
+}): Promise<T> {
+  return (await performMailboxOperation(auth, mailbox, async (imapClient) => {
+    const status = await imapClient.status(mailbox, {
+      messages: true,
+      recent: true,
+      unseen: true,
+    });
+
+    const stats: MailboxStats = {
+      deleted: await getQueryStat(imapClient, { deleted: true }),
+      flagged: await getQueryStat(imapClient, { flagged: true }),
+      recent: status.recent!,
+      total: status.messages!,
+      totalSize: null,
+      unread: status.unseen!,
+    };
+
+    if (includeSizeInfo && stats.total > 0) {
+      try {
+        const messages = imapClient.fetch('1:*', { size: true });
+        let totalSize = 0;
+
+        for await (const message of messages) {
+          totalSize += message.size || 0;
+        }
+
+        stats.totalSize = totalSize;
+      } catch {
+        // Ignore size calculation errors
+      }
+    }
+
+    return stats;
+  })) as T;
+}
+
+async function getQueryStat(
+  imapClient: ImapFlow,
+  query: Record<string, boolean>
+): Promise<number> {
+  const result = await imapClient.search(query);
+  return result ? result.length : 0;
+}
+
 async function moveEmail<T extends { success: boolean; newUid?: number }>({
   auth,
   sourceMailbox,
@@ -185,6 +310,29 @@ async function moveEmail<T extends { success: boolean; newUid?: number }>({
       return { success: false };
     }
   )) as T;
+}
+
+async function moveMailbox<T extends { success: true; newPath: string }>({
+  auth,
+  mailbox,
+  newParent,
+  newName,
+}: {
+  auth: ImapAuth;
+  mailbox: string;
+  newParent?: string;
+  newName?: string;
+}): Promise<T> {
+  return (await performImapOperation(auth, async (imapClient) => {
+    const mailboxInfo = await getMailbox(auth, mailbox);
+    const delimiter = mailboxInfo.delimiter;
+    const path = mailboxInfo.path.split(delimiter);
+    const name = newName ?? path.pop()!;
+    const newPath = [newParent, name].filter(Boolean) as string[];
+
+    const result = await imapClient.mailboxRename(mailbox, newPath);
+    return { success: true, newPath: result.newPath };
+  })) as T;
 }
 
 async function parseStream(stream: Readable) {
@@ -270,6 +418,30 @@ async function performMailboxOperation<T>(
   })) as T;
 }
 
+async function renameMailbox<T extends { success: true; newPath: string }>({
+  auth,
+  mailbox,
+  newName,
+}: {
+  auth: ImapAuth;
+  mailbox: string;
+  newName: string;
+}): Promise<T> {
+  return (await performImapOperation(auth, async (imapClient) => {
+    validateFolderName(newName);
+    const mailboxInfo = await getMailbox(auth, mailbox);
+    const delimiter = mailboxInfo.delimiter;
+
+    const path = mailboxInfo.path.split(delimiter);
+    path.pop();
+    path.push(newName);
+    const newPath = path.join(delimiter);
+
+    await imapClient.mailboxRename(mailbox, newPath);
+    return { success: true, newPath };
+  })) as T;
+}
+
 async function setEmailReadStatus<T extends { success: true }>({
   auth,
   mailbox,
@@ -299,6 +471,12 @@ async function setEmailReadStatus<T extends { success: true }>({
   )) as T;
 }
 
+function validateFolderName(name: string): void {
+  if (!name || name.trim().length === 0) {
+    throw new ImapInvalidFolderNameError(name, 'Folder name cannot be empty');
+  }
+}
+
 export {
   // Types
   type Attachment,
@@ -316,5 +494,10 @@ export {
   setEmailReadStatus,
 
   // Mailbox actions
+  createMailbox,
+  deleteMailbox,
   fetchMailboxes,
+  getMailboxStats,
+  moveMailbox,
+  renameMailbox,
 };

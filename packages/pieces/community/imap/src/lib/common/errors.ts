@@ -56,10 +56,33 @@ export class ImapEmailNotFoundError extends ImapError {
   }
 }
 
+export class ImapFolderExistsError extends ImapError {
+  constructor() {
+    super(`Folder already exists.`);
+    this.name = 'ImapFolderExistsError';
+  }
+}
+
+export class ImapFolderPermissionError extends ImapError {
+  constructor(operation: string) {
+    super(`Permission denied: cannot ${operation} folder.`);
+    this.name = 'ImapFolderPermissionError';
+  }
+}
+
 export class ImapHostNotFoundError extends ImapError {
   constructor() {
     super('Host not found. Please verify the IMAP server address.');
     this.name = 'ImapHostNotFoundError';
+  }
+}
+
+export class ImapInvalidFolderNameError extends ImapError {
+  constructor(folderName: string, details?: string) {
+    super(
+      `Invalid folder name '${folderName}'${details ? `: ${details}` : ''}`
+    );
+    this.name = 'ImapInvalidFolderNameError';
   }
 }
 
