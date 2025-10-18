@@ -1,31 +1,30 @@
-import { createAction } from '@activepieces/pieces-framework';
-import { pdfmonkeyAuth } from '../common/auth';
-import { makeRequest } from '../common/client';
-import { HttpMethod } from '@activepieces/pieces-common';
-import { documentIdDropdown } from '../common/props';
+import { createAction, Property } from '@activepieces/pieces-framework';
+import { pdfmonkeyAuth, makeClient } from '../common';
+import { propsValidation } from '@activepieces/pieces-common';
+import { z } from 'zod';
+
+const props = {
+	documentId: Property.ShortText({
+		displayName: 'actions.deleteDocument.documentId.displayName',
+		description: 'actions.deleteDocument.documentId.description',
+		required: true,
+	}),
+};
 
 export const deleteDocumentAction = createAction({
 	auth: pdfmonkeyAuth,
 	name: 'deleteDocument',
-	displayName: 'Delete Document',
-	description: 'Deletes a document.',
-	props: {
-		document_id: documentIdDropdown,
-	},
-	async run({ auth, propsValue }) {
-		const { document_id } = propsValue;
-		if (!document_id) {
-			throw new Error('Document ID is required');
-		}
-		const response = await makeRequest(
-			auth as string,
-			HttpMethod.DELETE,
-			`/documents/${document_id}`,
-		);
-		return {
-			status: 'success',
-			message: 'Document deleted successfully.',
-			data: response,
-		};
+	displayName: 'actions.deleteDocument.displayName',
+	description: 'actions.deleteDocument.description',
+	props,
+	run: async ({ auth, propsValue }: { auth: string, propsValue: { documentId: string } }): Promise<{ deletedAt: string }> => {
+		await propsValidation.validateZod(propsValue, {
+			documentId: z.string().uuid(),
+		});
+
+		const client = makeClient(auth);
+		await client.deleteDocument(propsValue.documentId);
+
+		return { deletedAt: new Date().toISOString() };
 	},
 });

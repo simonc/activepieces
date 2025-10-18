@@ -1,19 +1,28 @@
-import { createAction } from '@activepieces/pieces-framework';
-import { pdfmonkeyAuth } from '../common/auth';
-import { makeRequest } from '../common/client';
-import { HttpMethod } from '@activepieces/pieces-common';
-import { documentIdDropdown } from '../common/props';
+import { createAction, Property } from '@activepieces/pieces-framework';
+import { pdfmonkeyAuth, makeClient, type Document } from '../common';
+import { propsValidation } from '@activepieces/pieces-common';
+import { z } from 'zod';
+
+const props = {
+	documentId: Property.ShortText({
+		displayName: 'actions.findDocument.documentId.displayName',
+		description: 'actions.findDocument.documentId.description',
+		required: true,
+	}),
+};
 
 export const findDocumentAction = createAction({
 	auth: pdfmonkeyAuth,
 	name: 'findDocument',
-	displayName: 'Find Document',
-	description: 'Finds a document by ID.',
-	props: {
-		document_id: documentIdDropdown,
-	},
-	async run({ auth, propsValue }) {
-		const { document_id } = propsValue;
-		return await makeRequest(auth as string, HttpMethod.GET, `/documents/${document_id}`);
+	displayName: 'actions.findDocument.displayName',
+	description: 'actions.findDocument.description',
+	props,
+	run: async ({ auth, propsValue }: { auth: string, propsValue: { documentId: string } }): Promise<Document> => {
+		await propsValidation.validateZod(propsValue, {
+      documentId: z.string().uuid(),
+    });
+
+		const client = makeClient(auth);
+		return client.getDocument(propsValue.documentId);
 	},
 });

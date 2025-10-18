@@ -1,100 +1,75 @@
-import { DropdownOption, Property } from '@activepieces/pieces-framework';
-import { makeRequest } from './client';
-import { HttpMethod } from '@activepieces/pieces-common';
+import { Property } from '@activepieces/pieces-framework';
+import { makeClient } from './client';
+import { WorkspaceCard, DocumentTemplateCard } from './types';
 
-export const templateIdDropdown = Property.Dropdown({
-	displayName: 'Template ID',
-	required: true,
-	refreshers: [],
-	options: async ({ auth }) => {
-		if (!auth) {
-			return {
-				disabled: true,
-				options: [],
-				placeholder: 'Please connect your account first.',
-			};
-		}
+interface DropdownParams {
+  description?: string;
+  displayName: string;
+  required: boolean;
+  multiple?: boolean;
+}
 
-		try {
-			let page = 1;
-			let hasMore = true;
-
-			const options: DropdownOption<string>[] = [];
-
-			do {
-				const response = await makeRequest<{
-					document_template_cards: Array<{ id: string; identifier: string }>;
-					meta: { total_pages: number; current_page: number };
-				}>(auth as string, HttpMethod.GET, '/document_template_cards',{ page: page.toString() });
-
-				const items = response.document_template_cards ?? [];
-
-				for (const template of items) {
-					options.push({ label: template.identifier, value: template.id });
-				}
-
-				page++;
-				hasMore = response.meta.current_page < response.meta.total_pages;
-			} while (hasMore);
-
-			return {
-				disabled: false,
-				options,
-			};
-		} catch (error) {
-			return {
-				disabled: true,
-				options: [],
-				placeholder: 'Error loading document templates.',
-			};
-		}
-	},
+const _failure = (placeholder: string) => ({
+  disabled: true,
+  options: [],
+  placeholder,
 });
 
-export const documentIdDropdown = Property.Dropdown({
-	displayName: 'Document ID',
-	required: true,
-	refreshers: [],
-	options: async ({ auth }) => {
-		if (!auth) {
-			return {
-				disabled: true,
-				options: [],
-				placeholder: 'Please connect your account first.',
-			};
-		}
+export const workspaceIdDropdown = (params: DropdownParams) =>
+  Property.Dropdown<string>({
+    displayName: params.displayName,
+    description: params.description,
+    required: params.required,
+    refreshers: ['auth'],
+    options: async ({ auth }: { auth: string }) => {
+      if (!auth) {
+        return _failure('Please connect your account first.');
+      }
 
-		try {
-			let page = 1;
-			let hasMore = true;
+      try {
+				const client = makeClient(auth);
+				const workspaces = await client.getWorkspaceCards();
+        const options = workspaces.map(({ identifier, id }: WorkspaceCard) => ({
+          label: identifier,
+          value: id,
+        }));
 
-			const options: DropdownOption<string>[] = [];
+        return { disabled: false, options };
+      } catch (error) {
+        return _failure('Error loading workspaces.');
+      }
+    },
+  });
 
-			do {
-				const response = await makeRequest<{
-					document_cards: Array<{ id: string; filename: string }>;
-					meta: { total_pages: number; current_page: number };
-				}>(auth as string, HttpMethod.GET, '/document_cards', { page: page.toString() });
+export const templateIdDropdown = (params: DropdownParams) => {
+	const dropdownType = params.multiple === true ? Property.MultiSelectDropdown<string> : Property.Dropdown<string>;
 
-				const items = response.document_cards ?? [];
+	return dropdownType({
+    displayName: params.displayName,
+    description: params.description,
+    required: params.required,
+    refreshers: ['workspaceId'],
+    options: async ({ auth, workspaceId }: { auth: string; workspaceId: string }) => {
+      if (!auth) {
+        return _failure('Please connect your account first.');
+      }
 
-				for (const doc of items) {
-					options.push({ label: doc.filename, value: doc.id });
-				}
-				page++;
-				hasMore = response.meta.current_page < response.meta.total_pages;
-			} while (hasMore);
+      if (!workspaceId) {
+        return _failure('Please select a workspace first.');
+      }
 
-			return {
-				disabled: false,
-				options,
-			};
-		} catch (error) {
-			return {
-				disabled: true,
-				options: [],
-				placeholder: 'Error loading documents.',
-			};
-		}
-	},
-});
+      try {
+				const client = makeClient(auth);
+				const templates = await client.getTemplateCards(workspaceId);
+        const options = templates.map(({ identifier, id }: DocumentTemplateCard) => ({
+          label: identifier,
+          value: id,
+        }));
+
+        return { disabled: false, options };
+      } catch (error) {
+        return _failure('Error loading document templates.');
+      }
+    },
+  });
+}
